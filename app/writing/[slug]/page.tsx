@@ -786,6 +786,576 @@ const bookmarkCountMap = bookmarkCountsAgg.reduce((acc, item) => {
       },
     ],
   },
+  "live-event-log": {
+    slug: "live-event-log",
+    number: "05",
+    title: "Live Scores, Take Two: Nothing Is Stored, Everything Is Replayed",
+    tag: "REAL-TIME · ARCHITECTURE",
+    project: "CampScore",
+    date: "2026",
+    readTime: "9 min read",
+    lede: "Moving live data into its own collection fixed FSM. When I rebuilt it as CampScore I went one step further: the live console stores no score at all. It stores what happened, in order, and works the score out every time.",
+    tagColor: "border-orange-400 text-orange-400",
+    sections: [
+      {
+        type: "prose",
+        content: (
+          <>
+            In <Link href="/writing/live-fixture-separation" className="underline decoration-yellow-400/40 hover:text-white">the first live-match article</Link>{" "}
+            I moved live match data off the fixture and into its own collection.
+            That stopped live writes from fighting with historical reads, and it
+            worked for a semester of real competitions.
+            <br />
+            <br />
+            CampScore changed the shape of the problem. It isn&apos;t one
+            campus any more. It&apos;s organisations running football and
+            basketball, several operators on one match (one per team, sometimes
+            on bad mobile data), and fans watching from a public page. A live
+            document that gets mutated in place — <code>score.home += 1</code>{" "}
+            — falls apart under all three. So the rebuilt console follows one
+            rule.
+          </>
+        ),
+      },
+      {
+        type: "callout",
+        content: (
+          <>
+            The event log is the only source of truth. Nothing is edited in
+            place. Every score, stat, minute played and possession figure is
+            replayed from the log, and a correction is just another event.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Replay, Don't Mutate",
+        content: (
+          <>
+            A live fixture holds a list of events: <code>period_start</code>,{" "}
+            <code>goal</code>, <code>card</code>, <code>substitution</code>,{" "}
+            <code>possession</code> and so on. Each one has a server-assigned
+            sequence number. Everything a client sees — the score, the box
+            score, possession percentages — is a <em>projection</em> built by
+            replaying that list from the start:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `/** Rebuilds the projection from the log. Events must be in \`seq\` order; voided events are skipped. */
+export function replay(events: LiveEventRecord[], pack: LivePack, ctx: LiveContext): LiveProjection {
+    const p = emptyProjection();
+    // ...seed every player in both lineups so they appear even with no events
+    const voided = voidedIds(events);
+    p.voided = [...voided];
+    for (const e of events) {
+        p.lastSeq = Math.max(p.lastSeq, e.seq);
+        p.eventCount++;
+        if (e.type === CoreEventType.VOID || voided.has(e.id)) continue;
+        applyEvent(e, p, pack, ctx);
+    }
+    pack.finish(p, ctx);
+    // ...possession % from match-clock seconds per side
+    return p;
+}`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            The <code>pack</code> is the sport. Football and basketball each
+            have a sport pack that knows what a goal or a three-pointer does to
+            the projection, how periods work and what a valid event looks like.
+            The replay engine itself knows nothing about either sport, which is
+            why adding basketball didn&apos;t mean forking the console.
+            <br />
+            <br />
+            Replaying a whole match on every write sounds expensive. In
+            practice a match is a few hundred events, and the replay is
+            a pure function over an in-memory array. It&apos;s the cheapest part
+            of the request.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Corrections Are Events Too",
+        content: (
+          <>
+            Operators make mistakes: the wrong scorer, a goal that was
+            disallowed, a card given to the wrong player. In a mutable document,
+            fixing that means finding the right fields and decrementing them,
+            and hoping every derived number got the same fix.
+            <br />
+            <br />
+            Here a correction is a <code>void</code> event pointing at the
+            event it cancels. The next replay simply skips the voided event, so
+            every figure that depended on it is correct again at once —
+            including ones I didn&apos;t think about when I wrote the void.
+            There are a few guard rails: a void can&apos;t itself be voided
+            (you re-enter the event instead), and a period start or end can
+            only be voided while nothing valid has happened after it.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Retries Must Be Harmless",
+        content: (
+          <>
+            Console operators are often on mobile data at the side of a pitch.
+            Requests time out, and the app retries. Sometimes it queues events
+            offline and sends them all when the signal comes back. If the same
+            goal can arrive twice, it must only count once.
+            <br />
+            <br />
+            So the console generates a UUID — a <code>clientEventId</code> —
+            for every event, and the server stores each id once. A batch of
+            events is planned before anything is written:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `const stored = new Map(o.log.map(e => [e.clientEventId, e]));
+const seenInBatch = new Set<string>();
+
+o.inputs.forEach((input, index) => {
+    const existing = stored.get(input.clientEventId);
+    if (existing || seenInBatch.has(input.clientEventId)) {
+        results[index] = { clientEventId: input.clientEventId, status: 'duplicate', seq: existing?.seq ?? null };
+        return;
+    }
+    seenInBatch.add(input.clientEventId);
+    fresh.push({ index, input });
+});`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            Each fresh event is then placed in the match, validated against
+            the projection <em>as it was just before it</em>, and applied, so
+            event five in a batch is checked against the state after events one
+            to four. The response tells the console, per event, whether it was
+            accepted, rejected (with a reason) or a duplicate. A retry gets
+            &quot;duplicate&quot; back, not a second goal.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Two Operators, One Match",
+        content: (
+          <>
+            A match can have one operator per team plus one for the clock.
+            Most of their events don&apos;t conflict: a home-team card and an
+            away-team substitution can arrive in any order. The server numbers
+            them as they come, accepts them, and catches each console up in the
+            response.
+            <br />
+            <br />
+            Some events change the structure of the match, though:{" "}
+            <code>period_start</code>, <code>period_end</code>,{" "}
+            <code>shootout_start</code> and <code>void</code>. Ending the half
+            while another operator&apos;s goal is still in flight changes which
+            half that goal belongs to. For those, the console has to send the
+            last sequence number it has seen. If it is behind, the server
+            answers <code>409 LIVE_SEQUENCE_CONFLICT</code>, and the console
+            has to catch up before it can try again. Cheap events stay
+            optimistic; only the dangerous ones are strict.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "A Clock That Doesn't Need Writing",
+        content: (
+          <>
+            A running match clock is the most predictable number in the
+            system, so it shouldn&apos;t cost a write every second or every
+            minute. CampScore stores two values per period —
+            the seconds already played and when the clock last started — and
+            lets everyone compute the rest:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `/** Match-clock seconds at wall time \`at\` (never negative). */
+export function clockSecondsAt(clock: LiveProjection['clock'], at: Date): number {
+    if (!clock.running || !clock.lastStartedAt) return clock.baseSeconds;
+    return Math.max(0, clock.baseSeconds + Math.floor((at.getTime() - clock.lastStartedAt.getTime()) / 1000));
+}`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            Football counts up and basketball counts down from the period
+            length, but both are the same two numbers. Pausing the clock is an
+            event; ticking is free.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Why Fans Get SSE, Not Socket.IO",
+        content: (
+          <>
+            FSM used Socket.IO rooms. For CampScore I looked at who actually
+            sends what. Fans only listen to a match; they don&apos;t push live
+            data back over a socket. Operators write through ordinary REST calls, which already have auth,
+            validation, idempotency and error codes.
+            <br />
+            <br />
+            For one-way updates, Server-Sent Events are plain HTTP: no
+            handshake library on the client, the browser&apos;s{" "}
+            <code>EventSource</code> reconnects on its own, and it goes through
+            the same proxies as everything else. The server side is a small
+            registry of open responses grouped into rooms:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `emit(room: string, eventType: string, payload: unknown): void {
+    const ids = this.rooms.get(room);
+    if (!ids) return;
+    const frame = \`event: \${eventType}\\ndata: \${JSON.stringify(payload)}\\n\\n\`;
+    for (const id of ids) {
+        const conn = this.connections.get(id);
+        if (conn) {
+            try { conn.res.write(frame); }
+            catch { this.remove(id); }   // dead connection — reap it
+        }
+    }
+}`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            The live service never sees this class. It talks to a broadcast
+            port with <code>toFixture</code>, <code>toLeague</code> and{" "}
+            <code>watcherCount</code>, and the SSE adapter implements it. That
+            seam matters because the registry is per process: a fan connected
+            to one instance won&apos;t hear an event emitted on another. When
+            CampScore needs more than one instance, a Redis pub/sub backplane
+            goes behind the same port and the service doesn&apos;t change.
+            I&apos;d rather write that limit down than pretend it isn&apos;t
+            there.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Finishing a Match",
+        content: (
+          <>
+            When staff finalize the console, the last replay becomes the
+            fixture result: the score, period scores, team stats and every
+            player&apos;s box score. That result goes through the fixture
+            module&apos;s normal result path, so standings and player career
+            totals update exactly as they would for a result typed in by hand.
+            There is one path into the archive, not two.
+            <br />
+            <br />
+            Finalize also refuses to run in states that would produce a bad
+            archive: a period still in progress, regulation periods not played,
+            or — when the match is tracked at player level — a goal or basket
+            with no player attached. Then the log is locked.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "What Changed in How I Think",
+        content: (
+          <>
+            The first version of this article was about separating live state
+            from history. This one is about not having live state at all, only
+            a history that happens to still be growing. Once the log is the
+            truth, the hard features stop being hard: corrections, offline
+            retries, late entries, two operators, a public stream and a final
+            result all read from the same list.
+            <br />
+            <br />
+            The cost is discipline. Every new event type needs a schema, a rule
+            in the sport pack, and a decision about whether it is structural.
+            That&apos;s a fair price for never having to ask &quot;which number
+            is right?&quot; during a live final.
+          </>
+        ),
+      },
+    ],
+  },
+  "hashed-api-keys": {
+    slug: "hashed-api-keys",
+    number: "06",
+    title: "API Keys That Are Useless to Whoever Steals Your Database",
+    tag: "SECURITY · API DESIGN",
+    project: "Healthwise HMO",
+    date: "2026",
+    readTime: "7 min read",
+    lede: "Hospitals and HMOs don't only use the Healthwise dashboard. Their own systems call the API to request pre-authorisations and submit claims. That makes every API key a long-lived password held by a machine — so I designed them to be worthless if my database ever leaks.",
+    tagColor: "border-violet-400 text-violet-400",
+    sections: [
+      {
+        type: "prose",
+        content: (
+          <>
+            A user password has a lot of protection around it: two-factor
+            login, short-lived access tokens, refresh-token rotation. An API key
+            has none of that. A hospital&apos;s system sends the same key on
+            every call, possibly for months. If it leaks, whoever has it
+            <em> is</em> that hospital until someone notices.
+            <br />
+            <br />
+            The question I designed around was: what happens if the{" "}
+            <code>api_keys</code> collection itself is copied? The answer
+            should be &quot;nothing useful&quot;.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Shown Once, Stored as a Hash",
+        content: (
+          <>
+            A key is 32 random bytes, prefixed with the environment it belongs
+            to:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `const rawKey = \`\${dto.environment}_sk_\${crypto.randomBytes(32).toString('hex')}\`;
+// e.g. live_sk_9f2c… or test_sk_41ab…
+
+const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+const keyPrefix = rawKey.substring(0, 12);`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            The raw key is returned to the caller exactly once, in the response
+            that creates it. The database stores only the SHA-256 hash and the
+            first 12 characters, so a key can still be recognised in a listing
+            (&quot;live_sk_9f2c…&quot;) without being usable. If an
+            organisation loses its key, it can&apos;t be shown again — they
+            revoke it and create a new one.
+            <br />
+            <br />
+            The <code>live_</code> / <code>test_</code> prefix isn&apos;t
+            decoration. It means a developer can tell at a glance which key is
+            in a config file, and secret scanners can match the pattern.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Why SHA-256 and Not bcrypt",
+        content: (
+          <>
+            My first instinct was bcrypt, because that&apos;s what passwords
+            get. It&apos;s the wrong tool here, for two reasons.
+            <br />
+            <br />
+            <strong>bcrypt exists to slow down guessing.</strong> Passwords are
+            chosen by people, so the space of likely passwords is small and an
+            attacker with the hashes can try them fast. A 256-bit random key
+            has no &quot;likely&quot; values. Brute-forcing it is hopeless
+            whether each guess costs a nanosecond or a second, so the slowness
+            buys nothing.
+            <br />
+            <br />
+            <strong>bcrypt can&apos;t be looked up.</strong> Each bcrypt hash
+            has its own salt, so to find which key a request is using you would
+            have to compare it against every stored key. A plain SHA-256 of a
+            high-entropy key is deterministic: hash the incoming key, then do
+            one indexed <code>findOne(&#123; keyHash &#125;)</code>. That
+            matters on an endpoint every partner system hits on every call.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "What Every Request Goes Through",
+        content: (
+          <>
+            One middleware handles every system caller. It accepts the key as a
+            Bearer token or an <code>X-Api-Key</code> header, so partners can
+            use whichever their HTTP client makes easier:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+const key = await keyRepo.findByHash(keyHash);
+if (!key) return next(new InvalidApiKeyError());
+if (!key.isActive || key.revokedAt) return next(new ApiKeyRevokedError());
+if (key.expiresAt && key.expiresAt < new Date()) {
+    keyRepo.revoke(key.id).catch(/* log and move on */);
+    return next(new ApiKeyExpiredError());
+}
+
+keyRepo.updateLastUsed(key.id).catch(/* log and move on */);
+
+await assertOrganisationActive(key.organisationId);
+req.system = {
+    id: key.id,
+    organisationId: key.organisationId,
+    organisationType: key.organisationType,
+    environment: key.environment,
+    authType: 'system',
+};
+req.apiKeyScopes = key.scopes;`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            A few choices in there are deliberate.
+            <br />
+            <br />
+            <strong>Expired keys revoke themselves.</strong> The first call
+            with an expired key marks it revoked, so the dashboard shows the
+            truth without a cron job.
+            <br />
+            <br />
+            <strong>Bookkeeping never blocks the request.</strong> Updating{" "}
+            <code>lastUsedAt</code> and the self-revoke are fire-and-forget: a
+            failure is logged, and the partner&apos;s call is not slowed down
+            or failed because of a timestamp.
+            <br />
+            <br />
+            <strong>The organisation is checked, not just the key.</strong> If
+            an organisation is suspended, all of its keys stop working at once,
+            without anyone revoking them one by one.
+            <br />
+            <br />
+            <strong>The caller is a system, not a user.</strong> Downstream
+            code reads <code>req.system</code> and knows it is talking to an
+            integration with an organisation, not a person with a role.
+            Services that act for both use one &quot;org caller&quot; shape, so
+            access rules are written once.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Scopes by Organisation Type",
+        content: (
+          <>
+            A valid key isn&apos;t permission to do everything. Each key carries
+            scopes, and routes declare the one they need with{" "}
+            <code>requireScope</code>. The defaults come from what kind of
+            organisation owns the key:
+          </>
+        ),
+      },
+      {
+        type: "code",
+        lang: "ts",
+        content: `export const DEFAULT_HOSPITAL_ORG_API_KEY_SCOPES: ApiKeyScope[] = [
+    ApiKeyScope.PREAUTH_REQUEST,
+    ApiKeyScope.PREAUTH_READ,
+    ApiKeyScope.CLAIM_SUBMIT,
+    ApiKeyScope.CLAIM_READ,
+    // ...invoices, services, prices, events
+];
+
+export const DEFAULT_HMO_ORG_API_KEY_SCOPES: ApiKeyScope[] = [
+    ApiKeyScope.PREAUTH_DECIDE,
+    ApiKeyScope.PREAUTH_READ,
+    ApiKeyScope.CLAIM_DECIDE,
+    ApiKeyScope.CLAIM_READ,
+    // ...invoices, services, prices, events
+];`,
+      },
+      {
+        type: "prose",
+        content: (
+          <>
+            A hospital&apos;s key can request a pre-authorisation and submit a
+            claim. It can&apos;t approve either. An HMO&apos;s key can decide,
+            but it can&apos;t submit a claim on a hospital&apos;s behalf. Even
+            a stolen key can only do what that side of the relationship is
+            allowed to do. Extra scopes can be added to a key when it is
+            created, on top of the defaults.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "Live and Test Never Mix",
+        content: (
+          <>
+            Partners need somewhere to build their integration without filing
+            real claims against real patients. So every pre-auth, claim and
+            invoice carries a <code>livemode</code> flag, and the two modes
+            never meet:
+            <br />
+            <br />
+            — an API key&apos;s mode is its environment, so a{" "}
+            <code>test_sk_</code> key can only ever touch test records;
+            <br />
+            — a signed-in user picks the mode with an{" "}
+            <code>X-Livemode</code> header (live when it&apos;s missing, and
+            anything other than <code>true</code> or <code>false</code> is a
+            400);
+            <br />
+            — a claim can only be made from a pre-auth in the same mode, and
+            reference numbers are unique per mode;
+            <br />
+            — only live records send notifications.
+            <br />
+            <br />
+            The test mode is the whole system, not a mock of it. A partner who
+            gets their flow working against test keys has exercised exactly the
+            code their live keys will hit.
+          </>
+        ),
+      },
+      { type: "divider" },
+      {
+        type: "prose",
+        label: "The Short Version",
+        content: (
+          <>
+            Treat an API key like a password the user never typed: make it
+            long and random, show it once, store a hash you can index, and
+            check more than the key on every call — its status, its expiry,
+            its organisation, its scope and its mode. Then a copy of the
+            database is a list of hashes and prefixes, and nothing more.
+          </>
+        ),
+      },
+    ],
+  },
 };
 
 // ─── Article Page ─────────────────────────────────────────────────────────────
@@ -795,7 +1365,8 @@ const TAG_COLORS: Record<string, string> = {
   "BACKEND · ALGORITHMS": "border-red-500 text-red-400",
   "CACHING · REDIS": "border-green-500 text-green-400",
   "TYPESCRIPT · REFACTORING": "border-blue-400 text-blue-400",
-  DATABASES: "border-violet-400 text-violet-400",
+  "REAL-TIME · ARCHITECTURE": "border-orange-400 text-orange-400",
+  "SECURITY · API DESIGN": "border-violet-400 text-violet-400",
 };
 
 function CodeBlock({ lang, content }: { lang?: string; content: string }) {
