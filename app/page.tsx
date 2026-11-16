@@ -59,6 +59,8 @@ interface Project {
   frontend: string;
   status: string;
   github?: string;
+  sourceLabel?: string;
+  live?: string;
   canShow: boolean;
   metrics: string[];
   index: number;
@@ -120,59 +122,77 @@ const ARTICLES: Article[] = [
     status: "soon",
   },
   {
-    id: "mongo-to-postgres",
+    id: "live-event-log",
     number: "05",
-    title:
-      "When MongoDB Isn't the Right Call: Switching to PostgreSQL Mid-Career",
-    tag: "DATABASES",
+    title: "Live Scores, Take Two: Nothing Is Stored, Everything Is Replayed",
+    tag: "REAL-TIME · ARCHITECTURE",
     excerpt:
-      "I've shipped MongoDB on most of my projects and it's been the right choice every time — until MediClaim. Pre-authorisations, line items, tariffs, claims, invoices, and audit logs: everything references everything else. Flexibility would have been a liability. Here's what made me switch, how Drizzle ORM made PostgreSQL feel less painful, and what I'd reach for now for different problem shapes.",
-    project: "MediClaim",
-    status: "soon",
+      "Moving live data into its own collection fixed FSM. For CampScore I went further: the live console stores no score at all. Every goal, basket, card and substitution is an event in an append-only log, and the score is replayed from it. Here's how idempotent event ids, a sequence guard, void-as-correction and Server-Sent Events fit together.",
+    project: "CampScore",
+    status: "published",
+    readTime: "9 min",
+  },
+  {
+    id: "hashed-api-keys",
+    number: "06",
+    title: "API Keys That Are Useless to Whoever Steals Your Database",
+    tag: "SECURITY · API DESIGN",
+    excerpt:
+      "Hospitals and HMOs call the Healthwise API from their own systems, so an API key is a password that never expires on its own. The design: random 256-bit keys shown once, stored only as SHA-256 hashes, scoped by organisation type, and split into live and test modes that never mix. Why SHA-256 and not bcrypt, and what the middleware checks on every call.",
+    project: "Healthwise HMO",
+    status: "published",
+    readTime: "7 min",
   },
 ];
 
 const PROJECTS: Project[] = [
   {
     id: "campscore",
-    name: "CampScore / FSM",
-    tag: "ORIGIN · ONGOING",
+    name: "CampScore",
+    tag: "ORIGIN · LIVE",
     tagType: "ongoing",
     year: "2024–NOW",
-    hours: "166H BACKEND · 140H FRONTEND",
+    hours: "",
     oneLiner:
-      "The project that started it all — a university sports platform born from the absence of any central record of campus football history.",
+      "The project that started it all. A campus football site (FSM) that grew into a multi-tenant sports platform, now live at campscore.live.",
     description:
-      "No database. No records. Just word of mouth and screenshots. I built FSM to fix that — a full sports management platform covering competitions, fixtures, player stats, TOTS voting, and real-time live match updates. What began as a JavaScript API became a dual-version system (V1/V1.2 in JS, V2 in TypeScript) as I used the project to learn TypeScript properly. V2 introduced WebSockets for live match broadcasting, a blog/media system, basketball support, and a deeper role hierarchy. It ran live for a full semester, served real competitions, and now lives in a full SaaS refactor as CampScore.",
+      "FSM began because campus football had no records, only word of mouth and screenshots. It ran live for a full semester as a JavaScript API, then a TypeScript V2 with WebSockets and basketball support. CampScore is the full rebuild as a SaaS. Organisations such as schools, clubs and associations run football and basketball competitions with units, teams and a player pool. Seasons can be leagues, knockouts, group stages or pot draws, and standings, box scores and player career stats are computed on the server. The centrepiece is a live match console. Operators record the match as it happens, and fans follow along on a live page with ratings, reactions, player-of-the-match voting, predictions, and share links with QR codes. Friendly games run on the same live engine.",
     decisions: [
-      "Dual-version architecture — V1 (JS) and V2 (TS) ran in parallel, enabling gradual migration with zero downtime for the live system",
-      "Mongoose discriminator pattern for competition types — league tables, knockout brackets, and group stages extended from a single base schema",
-      "Isolated live fixture collection — real-time match data lives separately; WebSocket rooms broadcast to clients without polluting historical records",
-      "TOTS weighted voting — admin votes carry 10× weight; algorithm determines winning formations and top players per position automatically",
-      "Audit middleware on every admin action — IP, user agent, before/after state captured asynchronously so it never adds latency",
+      "The event log is the only source of truth for a live match. Nothing is edited in place: score, stats, minutes played and possession are replayed from the log, and a correction is a void event.",
+      "Idempotent, ordered writes. Every console event carries a client-generated id, so retries and offline replays are harmless. The server numbers events and returns 409 when an operator tries a structural change (period start or end) without having seen the latest event.",
+      "Fans get live updates over Server-Sent Events. Fans only read, so a plain HTTP stream replaced Socket.IO. Connections are grouped in fixture and league rooms behind a broadcast port, so a Redis backplane can be added later without touching the service.",
+      "Domain-driven modules joined only by ports and a typed in-process event bus. Audit logging and push notifications react to events, and no module imports another.",
+      "Strict tenancy. League, season, team and player data is scoped to an organisation taken from the token, never from a query parameter. Requests across tenants return 404, not 403.",
     ],
     stack: [
       "Node.js",
-      "Express",
-      "MongoDB",
       "TypeScript",
-      "Socket.IO",
-      "JWT",
-      "Swagger",
-      "Cloudinary",
-      "Nodemailer",
+      "Express 5",
+      "MongoDB",
+      "Zod",
+      "Vitest",
+      "Server-Sent Events",
+      "Firebase Cloud Messaging",
+      "Next.js",
+      "next-intl",
+      "Tailwind",
+      "Zustand",
     ],
-    consumed: "REST API + WebSocket (Socket.IO) + Swagger docs at /api-docs",
+    consumed:
+      "REST API with an API reference covering every route, plus SSE streams for live matches.",
     frontend:
-      "Collaborated with a frontend developer. Admin panel designed and built by me in Next.js.",
-    status: "Frontend being stabilised. CampScore SaaS refactor in progress.",
+      "Next.js web app in English and German with light and dark themes, built with a second frontend developer. Type-check, lint, translation-parity and theme-contrast checks run before every commit.",
+    status: "Live at campscore.live. The origin FSM backend is public.",
     github: "https://github.com/WebDeveloperGlory/fupre_sports_media_backend",
+    sourceLabel: "FSM Source",
+    live: "https://campscore.live",
     canShow: true,
     metrics: [
-      "2 API versions",
-      "7 admin roles",
-      "Real-time WebSockets",
-      "TOTS voting system",
+      "Live at campscore.live",
+      "Football + basketball",
+      "27 API modules",
+      "100 test files",
+      "Event-sourced live console",
     ],
     index: 0,
   },
@@ -308,57 +328,106 @@ const PROJECTS: Project[] = [
     index: 3,
   },
   {
-    id: "mediclaim",
-    name: "MediClaim",
+    id: "healthwise-hmo",
+    name: "Healthwise HMO",
     tag: "IN PROGRESS",
     tagType: "wip",
     year: "2025–NOW",
-    hours: "54H SO FAR",
+    hours: "",
     oneLiner:
-      "HMO management — hospitals submit pre-auth requests, HMOs decide, then claims and invoices follow. REST and SOAP from one Express app.",
+      "The connector between hospitals and HMOs: pre-authorisations, claims and invoices, used from a web app or straight from a hospital's own system with API keys.",
     description:
-      "Hospitals and HMOs communicate through fragmented manual processes. MediClaim structures that flow: pre-auth request → HMO decision → claim + invoice. First project where I switched from MongoDB to PostgreSQL with Drizzle ORM — the relational nature of pre-auths, items, tariffs, and claims demanded it. REST serves the dashboards; SOAP handles legacy hospital system integrations on a separate path from the same Express app.",
+      "Hospitals and HMOs still settle care through calls, paper and spreadsheets. Healthwise structures the flow. A hospital requests a pre-authorisation, the HMO approves, partly approves or declines it, and the hospital turns an approved pre-auth into a claim that the HMO validates or disputes, one at a time or in bulk. Validated claims are bundled into invoices. Organisations, branches, staff, service catalogues and agreed prices (importable from CSV) sit around that flow. Every change is audited, and staff are notified by email and push. It started as MediClaim, an earlier PostgreSQL version, and was rebuilt on the same domain-driven MongoDB structure as my other projects.",
     decisions: [
-      "PostgreSQL + Drizzle ORM — pre-auths, items, tariffs, claims, invoices, and audit logs are genuinely relational; MongoDB's flexibility would have been a liability",
-      "REST + SOAP from one Express app — REST for dashboards; SOAP for legacy Hospital Information System integrations on a separate path",
-      "Refresh token rotation with family tracking — token reuse (replay attack) detected by family invalidation",
-      "API key system for hospital integrations — scoped keys with test/live environments and per-key audit logging",
-      "Three separate dashboard identities — hospital, HMO, and admin — same design tokens, distinct visual personalities",
+      "Live and test modes that never mix. Every pre-auth, claim and invoice carries a livemode flag, set by the API key's environment or a header. Only live records send notifications.",
+      "API keys for system callers. Random 256-bit keys are shown once and stored as SHA-256 hashes, with scopes defaulted by organisation type: hospitals request and submit, HMOs decide.",
+      "Status changes are conditional single writes. The expected status is part of the filter, so whoever loses a race gets 409 instead of overwriting the winner. Create, cancel and invoice steps run in transactions.",
+      "Price overrides on a claim need a reason and are audited. A claim is paid only by settling its invoice, and there is no mark-as-paid shortcut.",
+      "Email goes through a primary mail server and retries through a fallback only on retryable failures, with templates in English and German.",
     ],
     stack: [
       "Node.js",
       "TypeScript",
       "Express",
-      "PostgreSQL",
-      "Drizzle ORM",
-      "JWT",
-      "Nodemailer",
+      "MongoDB",
       "Zod",
+      "JWT",
+      "Firebase Cloud Messaging",
+      "Nodemailer",
+      "Vitest",
       "Next.js",
+      "next-intl",
       "Tailwind",
       "Zustand",
-      "Axios",
     ],
     consumed:
-      "REST API (dashboards) + SOAP API (legacy HIS integrations). Next.js frontend built by me.",
+      "REST API for the dashboards, plus /system routes for hospital and HMO systems using scoped API keys.",
     frontend:
-      "Full Next.js frontend — hospital dashboard, HMO dashboard, admin dashboard. Built by me.",
-    status: "In active development.",
+      "Next.js web app with dashboards for hospitals, HMOs and admins, in English and German. Built by me.",
+    status: "Backend and web app in development.",
     canShow: false,
     metrics: [
-      "REST + SOAP",
-      "PostgreSQL + Drizzle",
-      "3 org types",
-      "Pre-auth workflow",
-      "API key system",
+      "Pre-auth → claim → invoice",
+      "Live / test modes",
+      "Scoped API keys",
+      "Audit on every change",
+      "Bulk validate + dispute",
     ],
     index: 4,
+  },
+  {
+    id: "qmail",
+    name: "Qmail",
+    tag: "OWN TOOL",
+    tagType: "open",
+    year: "2026",
+    hours: "",
+    oneLiner:
+      "A small mail API I built after my host blocked outbound SMTP. My other backends send email through it with an API key.",
+    description:
+      "Render's free tier blocks outbound SMTP ports, which broke OTP and password-reset emails across my projects. Qmail is the workaround: a user registers their own SMTP mailbox once, and their apps send through it over HTTPS using an API key. It uses the same domain-driven layout as my other backends (user, api-key and mail modules over shared infrastructure), and every module has its own README.",
+    decisions: [
+      "Mailbox passwords are encrypted at rest with AES-256-GCM and decrypted only at the moment a message is sent. They are never returned in a response.",
+      "Human routes and system routes are split. People manage mailboxes with JWT sessions, and apps can only test and send, authenticated by API key.",
+      "Email bodies are sanitised with sanitize-html before sending, so a compromised caller can't use the service to send scripts.",
+      "Accounts have staged signup, password plus TOTP or email-OTP two-factor login, and device-aware refresh-token sessions.",
+      "The environment is validated with Zod at boot. The process exits with a field-by-field list if anything is missing.",
+    ],
+    stack: [
+      "Node.js",
+      "TypeScript",
+      "Express 5",
+      "MongoDB",
+      "Zod",
+      "Nodemailer",
+      "otplib",
+      "Vitest",
+      "Swagger",
+    ],
+    consumed: "REST API with Swagger docs. API-key routes for apps, JWT routes for people.",
+    frontend: "Next.js dashboard in progress.",
+    status: "Backend in use. Code is private.",
+    canShow: false,
+    metrics: [
+      "Encrypted SMTP credentials",
+      "API-key send routes",
+      "TOTP 2FA",
+      "Sanitised HTML",
+      "Per-module docs",
+    ],
+    index: 5,
   },
 ];
 
 const STACK: Record<string, string[]> = {
   "Core Languages": ["Node.js", "TypeScript", "JavaScript"],
-  Backend: ["Express.js", "REST API design", "WebSockets / Socket.IO", "SOAP"],
+  Backend: [
+    "Express.js",
+    "REST API design",
+    "WebSockets / Socket.IO",
+    "Server-Sent Events",
+    "SOAP",
+  ],
   "Databases & ORM": [
     "MongoDB / Mongoose",
     "PostgreSQL / Drizzle ORM",
@@ -377,7 +446,13 @@ const STACK: Record<string, string[]> = {
     "Service-controller pattern",
   ],
   Frontend: ["Next.js", "React", "Tailwind CSS"],
-  "DevOps & Tools": ["Docker", "Git", "Swagger / OpenAPI", "Postman"],
+  "DevOps & Tools": [
+    "Docker",
+    "Git",
+    "Swagger / OpenAPI",
+    "Postman",
+    "Vitest / Jest / Supertest",
+  ],
   Integrations: [
     "WhatsApp Business API",
     "Flutterwave",
@@ -401,7 +476,8 @@ const ARTICLE_TAG_COLORS: Record<string, string> = {
   "BACKEND · ALGORITHMS": "border-red-500 text-red-400",
   "CACHING · REDIS": "border-green-500 text-green-400",
   "TYPESCRIPT · REFACTORING": "border-blue-400 text-blue-400",
-  DATABASES: "border-violet-400 text-violet-400",
+  "REAL-TIME · ARCHITECTURE": "border-orange-400 text-orange-400",
+  "SECURITY · API DESIGN": "border-violet-400 text-violet-400",
 };
 
 function useInView(ref: React.RefObject<Element>, threshold = 0.15) {
@@ -544,7 +620,7 @@ function Hero({ onNav }: { onNav: (id: NavLink) => void }) {
             {[
               { n: "6", label: "FEATURED PROJECTS" },
               { n: "300+", label: "ENDPOINTS" },
-              { n: "2", label: "SAAS IN PROGRESS" },
+              { n: "1", label: "SAAS LIVE" },
               { n: "400+", label: "TRACKED WAKATIME HRS" },
             ].map((s) => (
               <div
@@ -594,9 +670,11 @@ function ProjectCard({ project }: { project: Project }) {
               <span className="font-mono text-xs text-white/30 font-bold">
                 {project.year}
               </span>
-              <span className="font-mono text-xs text-white/20">
-                {project.hours}
-              </span>
+              {project.hours && (
+                <span className="font-mono text-xs text-white/20">
+                  {project.hours}
+                </span>
+              )}
             </div>
             <h3 className="font-mono font-black text-white text-2xl md:text-3xl uppercase tracking-tight group-hover:text-yellow-400 transition-colors duration-100 mb-3">
               {project.name}
@@ -694,21 +772,34 @@ function ProjectCard({ project }: { project: Project }) {
             <span className="font-mono text-xs text-white/25">
               {project.status}
             </span>
-            {project.canShow && project.github && (
-              <a
-                href={project.github}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-auto flex items-center gap-2 font-mono text-xs font-bold text-yellow-400 hover:text-yellow-300 uppercase tracking-widest transition-colors duration-100"
-              >
-                <GithubIcon size={12} /> View Source <ArrowUpRight size={11} />
-              </a>
-            )}
-            {!project.canShow && (
-              <span className="ml-auto font-mono text-xs text-white/15">
-                CODE NOT PUBLIC
-              </span>
-            )}
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-x-6 gap-y-2">
+              {project.live && (
+                <a
+                  href={project.live}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 font-mono text-xs font-bold text-yellow-400 hover:text-yellow-300 uppercase tracking-widest transition-colors duration-100"
+                >
+                  Visit Live <ArrowUpRight size={11} />
+                </a>
+              )}
+              {project.canShow && project.github && (
+                <a
+                  href={project.github}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 font-mono text-xs font-bold text-yellow-400 hover:text-yellow-300 uppercase tracking-widest transition-colors duration-100"
+                >
+                  <GithubIcon size={12} /> {project.sourceLabel ?? "View Source"}{" "}
+                  <ArrowUpRight size={11} />
+                </a>
+              )}
+              {!project.canShow && (
+                <span className="font-mono text-xs text-white/15">
+                  CODE NOT PUBLIC
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}
